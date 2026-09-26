@@ -30,5 +30,13 @@ RUN apt-get update \
 # Unity's Blender importer looks the executable up on PATH.
 ENV PATH="/opt/blender-${BLENDER_FULL_VERSION}-linux-x64:${PATH}"
 
+# The WebGL build compresses its output; some editor builds look for the brotli
+# tool on PATH instead of shipping one, so install it when the base image
+# offers it. Missing it must not break the image.
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends brotli || echo "brotli package unavailable, continuing") \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Turns a broken download into a failed image build instead of failing imports.
 RUN blender --version

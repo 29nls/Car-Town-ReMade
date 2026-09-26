@@ -1,17 +1,19 @@
 name: Unity CI
 
-# Publishes the Unity 2020.1.8f1 + Blender image used by the jobs below, runs the
-# EditMode test suite and compiles the project - all inside the official GameCI
-# editor container. No local Unity installation is needed: the Unity version
-# comes from ProjectSettings/ProjectVersion.txt and Blender comes from
+# Publishes the Unity 2020.1.8f1 + Blender images used by the jobs below, runs
+# the EditMode test suite, compiles the project and deploys a WebGL build to
+# GitHub Pages - all inside the official GameCI editor containers. No local
+# Unity installation is needed: the Unity version comes from
+# ProjectSettings/ProjectVersion.txt and Blender comes from
 # .github/docker/unity-editor-blender/, so the .blend models are imported too.
 #
-# GameCI pulls its editor image from a registry, so the custom image is built
-# once and published to GitHub's container registry. Should that push ever fail
-# (for example when a private package exceeds the storage allowance of a free
-# plan), the jobs fall back to the stock Unity image with a warning instead of
-# failing. Making the package public (repository > Packages > package settings)
-# is free and keeps the Blender enabled image in use.
+# GameCI pulls its editor image from a registry, so the custom images (one with
+# the Linux build support, one with the WebGL module) are built once and
+# published to GitHub's container registry. Should that push ever fail - for
+# example when a private package exceeds the storage allowance of a free plan -
+# the jobs fall back to the stock Unity image with a warning instead of failing.
+# Making the packages public (repository > Packages > package settings) is free
+# and keeps the Blender enabled images in use.
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   UNITY_LICENSE  - contents of a manually activated license file (.ulf), Personal license
@@ -19,6 +21,11 @@ name: Unity CI
 #   UNITY_PASSWORD - password of the Unity account
 # Plus/Pro users set UNITY_SERIAL instead of UNITY_LICENSE.
 # One-time activation steps: https://game.ci/docs/github/activation
+#
+# The Pages deployment needs Pages enabled with "GitHub Actions" as its source;
+# the Configure Pages step tries to enable it automatically. WebGL players are
+# gzip compressed, so ProjectSettings.asset enables Decompression Fallback -
+# GitHub Pages cannot set Content-Encoding headers.
 #
 # Only code that is pushed to GitHub is checked; local, uncommitted changes are
 # not part of a run.
@@ -36,35 +43,44 @@ concurrency:
 
 permissions:
   contents: read
-  packages: read # pull the CI image back out of GitHub's container registry
+  packages: read # pull the CI images back out of GitHub's container registry
 
 jobs:
   ci_image:
-    name: Publish Unity + Blender image
+    name: Publish Unity + Blender images
     # Older editor images are happiest on 22.04, which also has the disk space
-    # the multi-gigabyte Unity image needs.
+    # the multi-gigabyte Unity images need.
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
-      packages: write # publish the CI image to GitHub's container registry
+      packages: write # publish the CI images to GitHub's container registry
     outputs:
-      image: ${{ steps.tag.outputs.image }}
-      published: ${{ steps.published.outputs.published }}
+      image_unity: ${{ steps.tag.outputs.image_unity }}
+      image_webgl: ${{ steps.tag.outputs.image_webgl }}
+      published_unity: ${{ steps.published.outputs.unity }}
+      published_webgl: ${{ steps.published.outputs.webgl }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # The tag carries a hash of the Dockerfile, so the published image is
+      # The tags carry a hash of the Dockerfile, so the published images are
       # reused until the Dockerfile changes.
-      - name: Compute the image tag
+      - name: Compute the image tags
         id: tag
         run: |
           HASH="$(sha256sum .github/docker/unity-editor-blender/Dockerfile | cut -c1-8)"
           OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          IMAGE="ghcr.io/${OWNER}/car-town-unity-ci:2020.1.8f1-blender-${HASH}"
-          echo "CI_IMAGE=${IMAGE}" >> "$GITHUB_ENV"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          UNITY_IMAGE="ghcr.io/${OWNER}/car-town-unity-ci:2020.1.8f1-linux-il2cpp-blender-${HASH}"
+          WEBGL_IMAGE="ghcr.io/${OWNER}/car-town-unity-ci:2020.1.8f1-webgl-blender-${HASH}"
+          {
+            echo "IMAGE_UNITY=${UNITY_IMAGE}"
+            echo "IMAGE_WEBGL=${WEBGL_IMAGE}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "image_unity=${UNITY_IMAGE}"
+            echo "image_webgl=${WEBGL_IMAGE}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -73,33 +89,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check whether the image already exists
-        id: exists
-        run: |
-          if docker manifest inspect "$CI_IMAGE" > /dev/null 2>&1; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # continue-on-error keeps a failed push from skipping the test and build
-      # jobs; the step below then falls back to the stock Unity image.
-      - name: Build and publish the image
-        if: ${{ steps.exists.outputs.present != 'true' }}
+      # continue-on-error keeps a failed push from skipping the test, build and
+      # deploy jobs; the step below then falls back to the stock Unity images.
+      - name: Build and publish the missing images
         continue-on-error: true
         run: |
-          docker build --tag "$CI_IMAGE" .github/docker/unity-editor-blender
-          docker push "$CI_IMAGE"
+          publish() {
+            module="$1"
+            image="$2"
+            if docker manifest inspect "$image" > /dev/null 2>&1; then
+              echo "${image} is already published"
+              return 0
+            fi
+            docker build \
+              --build-arg "GAMECI_IMAGE=unityci/editor:2020.1.8f1-${module}-3" \
+              --tag "$image" \
+              .github/docker/unity-editor-blender
+            docker push "$image"
+          }
+          publish linux-il2cpp "$IMAGE_UNITY"
+          publish webgl "$IMAGE_WEBGL"
 
-      - name: Report whether the custom image is usable
+      - name: Report which images are usable
         id: published
         run: |
-          if docker manifest inspect "$CI_IMAGE" > /dev/null 2>&1; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::The Unity + Blender image is not available in the registry, using the stock Unity image instead."
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
+          report() {
+            name="$1"
+            image="$2"
+            if docker manifest inspect "$image" > /dev/null 2>&1; then
+              echo "${name}=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::${image} is missing, the stock Unity image is used instead."
+              echo "${name}=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          report unity "$IMAGE_UNITY"
+          report webgl "$IMAGE_WEBGL"
 
   editmode-tests:
     name: EditMode tests
@@ -129,9 +154,9 @@ jobs:
             echo "See https://game.ci/docs/github/activation"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Needed while the published image is private; a public package needs no login.
+      # Needed while a published image is private; public packages need no login.
       - name: Log in to GitHub Container Registry
-        if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published == 'true' }}
+        if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published_unity == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -157,7 +182,7 @@ jobs:
           unityVersion: auto # -> 2020.1.8f1 from ProjectSettings/ProjectVersion.txt
           # Empty when the custom image could not be published: GameCI then uses
           # its stock editor image.
-          customImage: ${{ needs.ci_image.outputs.published == 'true' && needs.ci_image.outputs.image || '' }}
+          customImage: ${{ needs.ci_image.outputs.published_unity == 'true' && needs.ci_image.outputs.image_unity || '' }}
           testMode: editmode
           # To also get the results as an inline check on the commit, add
           # "githubToken: ${{ secrets.GITHUB_TOKEN }}" here, grant this workflow
@@ -194,7 +219,7 @@ jobs:
         run: echo "::warning::No Unity license secret configured (UNITY_LICENSE or UNITY_SERIAL), skipping the compile check."
 
       - name: Log in to GitHub Container Registry
-        if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published == 'true' }}
+        if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published_unity == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -216,7 +241,7 @@ jobs:
         uses: game-ci/unity-builder@v4
         with:
           unityVersion: auto
-          customImage: ${{ needs.ci_image.outputs.published == 'true' && needs.ci_image.outputs.image || '' }}
+          customImage: ${{ needs.ci_image.outputs.published_unity == 'true' && needs.ci_image.outputs.image_unity || '' }}
           targetPlatform: StandaloneLinux64
           allowDirtyBuild: true # Unity creates the missing .meta files during import
 
@@ -229,3 +254,81 @@ jobs:
       #     name: StandaloneLinux64
       #     path: build/StandaloneLinux64
       #     retention-days: 7
+
+  webgl-pages:
+    name: WebGL build & Pages deploy
+    needs: ci_image
+    # Pull requests validate the code without publishing a player; pushes to
+    # main and manual runs refresh the playable build.
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+      pages: write # publish the player to GitHub Pages
+      id-token: write # sign the Pages deployment
+    # GitHub's Pages guidance: never run two deployments at the same time.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+      UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+      UNITY_CI_ENABLED: ${{ secrets.UNITY_LICENSE != '' || secrets.UNITY_SERIAL != '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Note missing license secret
+        if: ${{ env.UNITY_CI_ENABLED != 'true' }}
+        run: echo "::warning::No Unity license secret configured (UNITY_LICENSE or UNITY_SERIAL), the WebGL build is skipped."
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published_webgl == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Unity Library
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-WebGL-${{ runner.os }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-WebGL-${{ runner.os }}-
+
+      # The player ends up in build/WebGL/WebGL, which is what Pages serves.
+      - name: Build WebGL player
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: game-ci/unity-builder@v4
+        with:
+          unityVersion: auto
+          customImage: ${{ needs.ci_image.outputs.published_webgl == 'true' && needs.ci_image.outputs.image_webgl || '' }}
+          targetPlatform: WebGL
+          allowDirtyBuild: true
+
+      - name: Configure Pages
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true # turns Pages on with "GitHub Actions" as its source
+
+      - name: Upload the player
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/WebGL/WebGL
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: actions/deploy-pages@v4
