@@ -4,6 +4,15 @@
     <img src="https://cdn.myportfolio.com/0267835fdf119947cf36604d08f4f0e5/f2f4a76e840063b0c6271674.png?h=880d362c888fcbcd33215331990836aa" alt="Logo" width="645" height="362">
   </a>
 
+  <br/>
+
+  <a href="https://29nls.github.io/Car-Town-ReMade/">
+    <img src="https://img.shields.io/badge/Play%20in%20browser-open%20the%20demo-2ea44f?style=for-the-badge" alt="Play in browser">
+  </a>
+  <a href="https://github.com/29nls/Car-Town-ReMade/actions/workflows/unity-ci.yml">
+    <img src="https://github.com/29nls/Car-Town-ReMade/actions/workflows/unity-ci.yml/badge.svg?branch=main" alt="Unity CI status">
+  </a>
+
   <h3 align="center"><a href="https://discord.gg/hKaMxECxQM"><img src="https://assets-global.website-files.com/6257adef93867e50d84d30e2/636e0b5061df29d55a92d945_full_logo_blurple_RGB.svg" width="500" height="50" alt="Join our Discord"></a></h3>
 
 </p>
