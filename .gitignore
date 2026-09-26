@@ -74,3 +74,6 @@ crashlytics-build.properties
 # Blender backup files (auto-generated, not source assets)
 *.blend1
 *.blend1.meta
+
+# Local editor/agent workspace state
+.freebuff/
