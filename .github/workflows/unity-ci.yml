@@ -1,8 +1,17 @@
 name: Unity CI
 
-# Runs the EditMode test suite and compiles the project inside the official Unity
-# 2020.1.8f1 editor container (GameCI). No local Unity installation is needed:
-# the Unity version comes from ProjectSettings/ProjectVersion.txt.
+# Publishes the Unity 2020.1.8f1 + Blender image used by the jobs below, runs the
+# EditMode test suite and compiles the project - all inside the official GameCI
+# editor container. No local Unity installation is needed: the Unity version
+# comes from ProjectSettings/ProjectVersion.txt and Blender comes from
+# .github/docker/unity-editor-blender/, so the .blend models are imported too.
+#
+# GameCI pulls its editor image from a registry, so the custom image is built
+# once and published to GitHub's container registry. Should that push ever fail
+# (for example when a private package exceeds the storage allowance of a free
+# plan), the jobs fall back to the stock Unity image with a warning instead of
+# failing. Making the package public (repository > Packages > package settings)
+# is free and keeps the Blender enabled image in use.
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   UNITY_LICENSE  - contents of a manually activated license file (.ulf), Personal license
@@ -12,9 +21,7 @@ name: Unity CI
 # One-time activation steps: https://game.ci/docs/github/activation
 #
 # Only code that is pushed to GitHub is checked; local, uncommitted changes are
-# not part of a run. Blender is not shipped in the editor image, so the .blend
-# models are skipped during import - a green run means the scripts compile, the
-# tests pass and the project builds, not that every model was imported.
+# not part of a run.
 
 on:
   push:
@@ -29,12 +36,74 @@ concurrency:
 
 permissions:
   contents: read
+  packages: read # pull the CI image back out of GitHub's container registry
 
 jobs:
+  ci_image:
+    name: Publish Unity + Blender image
+    # Older editor images are happiest on 22.04, which also has the disk space
+    # the multi-gigabyte Unity image needs.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write # publish the CI image to GitHub's container registry
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+      published: ${{ steps.published.outputs.published }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The tag carries a hash of the Dockerfile, so the published image is
+      # reused until the Dockerfile changes.
+      - name: Compute the image tag
+        id: tag
+        run: |
+          HASH="$(sha256sum .github/docker/unity-editor-blender/Dockerfile | cut -c1-8)"
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/car-town-unity-ci:2020.1.8f1-blender-${HASH}"
+          echo "CI_IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether the image already exists
+        id: exists
+        run: |
+          if docker manifest inspect "$CI_IMAGE" > /dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # continue-on-error keeps a failed push from skipping the test and build
+      # jobs; the step below then falls back to the stock Unity image.
+      - name: Build and publish the image
+        if: ${{ steps.exists.outputs.present != 'true' }}
+        continue-on-error: true
+        run: |
+          docker build --tag "$CI_IMAGE" .github/docker/unity-editor-blender
+          docker push "$CI_IMAGE"
+
+      - name: Report whether the custom image is usable
+        id: published
+        run: |
+          if docker manifest inspect "$CI_IMAGE" > /dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::The Unity + Blender image is not available in the registry, using the stock Unity image instead."
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
   editmode-tests:
     name: EditMode tests
-    # Older editor images are happiest on 22.04, which also has the disk space
-    # the multi-gigabyte Unity images need.
+    needs: ci_image
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     env:
@@ -60,6 +129,15 @@ jobs:
             echo "See https://game.ci/docs/github/activation"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Needed while the published image is private; a public package needs no login.
+      - name: Log in to GitHub Container Registry
+        if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       # Reuses Unity's import cache between runs (roughly halves the run time).
       - name: Cache Unity Library
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
@@ -77,6 +155,9 @@ jobs:
         uses: game-ci/unity-test-runner@v4
         with:
           unityVersion: auto # -> 2020.1.8f1 from ProjectSettings/ProjectVersion.txt
+          # Empty when the custom image could not be published: GameCI then uses
+          # its stock editor image.
+          customImage: ${{ needs.ci_image.outputs.published == 'true' && needs.ci_image.outputs.image || '' }}
           testMode: editmode
           # To also get the results as an inline check on the commit, add
           # "githubToken: ${{ secrets.GITHUB_TOKEN }}" here, grant this workflow
@@ -95,6 +176,7 @@ jobs:
 
   build:
     name: Compile & build project
+    needs: ci_image
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     env:
@@ -111,6 +193,14 @@ jobs:
         if: ${{ env.UNITY_CI_ENABLED != 'true' }}
         run: echo "::warning::No Unity license secret configured (UNITY_LICENSE or UNITY_SERIAL), skipping the compile check."
 
+      - name: Log in to GitHub Container Registry
+        if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Cache Unity Library
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
         uses: actions/cache@v4
@@ -126,6 +216,7 @@ jobs:
         uses: game-ci/unity-builder@v4
         with:
           unityVersion: auto
+          customImage: ${{ needs.ci_image.outputs.published == 'true' && needs.ci_image.outputs.image || '' }}
           targetPlatform: StandaloneLinux64
           allowDirtyBuild: true # Unity creates the missing .meta files during import
 
