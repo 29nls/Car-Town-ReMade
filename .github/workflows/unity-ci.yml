@@ -1,0 +1,140 @@
+name: Unity CI
+
+# Runs the EditMode test suite and compiles the project inside the official Unity
+# 2020.1.8f1 editor container (GameCI). No local Unity installation is needed:
+# the Unity version comes from ProjectSettings/ProjectVersion.txt.
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   UNITY_LICENSE  - contents of a manually activated license file (.ulf), Personal license
+#   UNITY_EMAIL    - e-mail address of the Unity account
+#   UNITY_PASSWORD - password of the Unity account
+# Plus/Pro users set UNITY_SERIAL instead of UNITY_LICENSE.
+# One-time activation steps: https://game.ci/docs/github/activation
+#
+# Only code that is pushed to GitHub is checked; local, uncommitted changes are
+# not part of a run. Blender is not shipped in the editor image, so the .blend
+# models are skipped during import - a green run means the scripts compile, the
+# tests pass and the project builds, not that every model was imported.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes the running check obsolete.
+concurrency:
+  group: unity-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  editmode-tests:
+    name: EditMode tests
+    # Older editor images are happiest on 22.04, which also has the disk space
+    # the multi-gigabyte Unity images need.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      # GameCI activates the license from these variables.
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+      UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+      # `secrets` is not allowed inside `if:`, so the guard flag is derived here.
+      UNITY_CI_ENABLED: ${{ secrets.UNITY_LICENSE != '' || secrets.UNITY_SERIAL != '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Note missing license secret
+        if: ${{ env.UNITY_CI_ENABLED != 'true' }}
+        run: |
+          echo "::warning::No Unity license secret configured (UNITY_LICENSE or UNITY_SERIAL), skipping Unity CI."
+          {
+            echo "### Unity CI skipped"
+            echo ""
+            echo "Add \`UNITY_LICENSE\` (a .ulf file) or \`UNITY_SERIAL\` (Plus/Pro) as a repository secret to enable it."
+            echo "See https://game.ci/docs/github/activation"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Reuses Unity's import cache between runs (roughly halves the run time).
+      - name: Cache Unity Library
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-${{ runner.os }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-${{ runner.os }}-
+
+      # Assets/Tests/EditMode covers CarPool and SpatialHash.
+      - name: Run EditMode tests
+        id: editmode-tests
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: game-ci/unity-test-runner@v4
+        with:
+          unityVersion: auto # -> 2020.1.8f1 from ProjectSettings/ProjectVersion.txt
+          testMode: editmode
+          # To also get the results as an inline check on the commit, add
+          # "githubToken: ${{ secrets.GITHUB_TOKEN }}" here, grant this workflow
+          # "checks: write" and set Settings > Actions > General > Workflow
+          # permissions to read and write. Without it the results are uploaded
+          # as an artifact instead.
+
+      - name: Upload test results
+        if: always() && env.UNITY_CI_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: EditMode test results
+          path: ${{ steps.editmode-tests.outputs.artifactsPath }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+  build:
+    name: Compile & build project
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+      UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+      UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+      UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+      UNITY_CI_ENABLED: ${{ secrets.UNITY_LICENSE != '' || secrets.UNITY_SERIAL != '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Note missing license secret
+        if: ${{ env.UNITY_CI_ENABLED != 'true' }}
+        run: echo "::warning::No Unity license secret configured (UNITY_LICENSE or UNITY_SERIAL), skipping the compile check."
+
+      - name: Cache Unity Library
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-${{ runner.os }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-${{ runner.os }}-
+
+      # A build runs the full script compilation, so compiler errors fail the job.
+      - name: Build project
+        if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+        uses: game-ci/unity-builder@v4
+        with:
+          unityVersion: auto
+          targetPlatform: StandaloneLinux64
+          allowDirtyBuild: true # Unity creates the missing .meta files during import
+
+      # Optional: publish the built player. Enable it if you want the artifact,
+      # keeping in mind that artifact storage is limited on free plans.
+      # - name: Upload build
+      #   if: ${{ env.UNITY_CI_ENABLED == 'true' }}
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: StandaloneLinux64
+      #     path: build/StandaloneLinux64
+      #     retention-days: 7
