@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes">
+  <meta name="description" content="Car Town ReMade - a browser playable traffic simulation of the classic Car Town.">
+  <title>{{{ PRODUCT_NAME }}}</title>
+  <style>
+    :root {
+      --ink: #f2f6fb;
+      --muted: #9db0c6;
+      --accent: #22c55e;
+      --accent-2: #0ea5e9;
+      --panel: rgba(9, 17, 28, 0.86);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: radial-gradient(circle at 50% 0%, #16324a 0%, #0b1723 45%, #05090e 100%);
+      color: var(--ink);
+      font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    #unity-container {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #unity-canvas {
+      width: 100%;
+      height: 100%;
+      background: #05090e;
+      display: block;
+    }
+
+    /* Loading / error overlay -------------------------------------------------- */
+
+    #unity-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      padding: 24px;
+      background: radial-gradient(circle at 50% 20%, rgba(22, 50, 74, 0.95) 0%, rgba(5, 9, 14, 0.98) 70%);
+      text-align: center;
+      transition: opacity 400ms ease;
+      z-index: 10;
+    }
+
+    #unity-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand img {
+      width: min(420px, 72vw);
+      height: auto;
+      filter: drop-shadow(0 10px 30px rgba(0, 0, 0, 0.55));
+    }
+
+    .brand .wordmark {
+      font-size: clamp(26px, 5vw, 46px);
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .panel {
+      width: min(460px, 84vw);
+      background: var(--panel);
+      border: 1px solid rgba(148, 190, 233, 0.18);
+      border-radius: 14px;
+      padding: 18px 20px 20px;
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
+    }
+
+    .progress-track {
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(148, 190, 233, 0.16);
+      overflow: hidden;
+    }
+
+    #unity-progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+      transition: width 160ms ease-out;
+    }
+
+    .progress-meta {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-top: 12px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    #unity-progress-percent {
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    #unity-error {
+      display: none;
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: rgba(220, 38, 38, 0.12);
+      border: 1px solid rgba(248, 113, 113, 0.4);
+      color: #fecaca;
+      font-size: 13px;
+      line-height: 1.45;
+      text-align: left;
+      word-break: break-word;
+    }
+
+    /* Controls and footer ------------------------------------------------------ */
+
+    #unity-toolbar {
+      position: absolute;
+      right: 16px;
+      bottom: 16px;
+      display: none;
+      gap: 10px;
+      z-index: 20;
+    }
+
+    #unity-toolbar.visible { display: flex; }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 190, 233, 0.28);
+      background: rgba(9, 17, 28, 0.82);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(34, 197, 94, 0.55);
+      background: rgba(14, 32, 48, 0.92);
+    }
+
+    .button svg { width: 15px; height: 15px; fill: currentColor; }
+
+    #unity-mobile-warning {
+      display: none;
+      max-width: 420px;
+      font-size: 13px;
+      color: #fed7aa;
+      background: rgba(251, 146, 60, 0.12);
+      border: 1px solid rgba(251, 146, 60, 0.35);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+
+    #unity-mobile-warning.visible { display: block; }
+
+    footer {
+      position: absolute;
+      left: 16px;
+      bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      z-index: 20;
+    }
+
+    footer a {
+      color: var(--muted);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(148, 190, 233, 0.35);
+    }
+
+    footer a:hover { color: var(--ink); }
+
+    footer .tag {
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(14, 165, 233, 0.4);
+      color: #bae6fd;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="unity-container">
+    <canvas id="unity-canvas" tabindex="-1" aria-label="{{{ PRODUCT_NAME }}} player"></canvas>
+  </div>
+
+  <div id="unity-overlay">
+    <div class="brand">
+      <img id="unity-logo"
+           src="https://cdn.myportfolio.com/0267835fdf119947cf36604d08f4f0e5/f2f4a76e840063b0c6271674.png?h=880d362c888fcbcd33215331990836aa"
+           alt="{{{ PRODUCT_NAME }}} logo"
+           onerror="this.style.display='none'; document.getElementById('unity-wordmark').style.display='block';">
+      <div class="wordmark" id="unity-wordmark" style="display:none">{{{ PRODUCT_NAME }}}</div>
+    </div>
+
+    <div class="panel">
+      <div class="progress-track" role="progressbar" aria-label="Loading {{{ PRODUCT_NAME }}}"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="unity-progress">
+        <div id="unity-progress-bar"></div>
+      </div>
+      <div class="progress-meta">
+        <span id="unity-progress-label">Preparing the traffic simulation...</span>
+        <span id="unity-progress-percent">0%</span>
+      </div>
+      <div id="unity-error"></div>
+      <div id="unity-mobile-warning">
+        This build targets desktop browsers. Mobile browsers often lack the memory WebGL needs,
+        so if it fails to start try a desktop machine.
+      </div>
+    </div>
+  </div>
+
+  <div id="unity-toolbar">
+    <button class="button" id="unity-fullscreen" type="button" title="Toggle fullscreen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5v2H6v3H4zm11-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 0h2v5h-5v-2h3v-3z"/></svg>
+      <span id="unity-fullscreen-label">Fullscreen</span>
+    </button>
+  </div>
+
+  <footer>
+    <a href="https://github.com/29nls/Car-Town-ReMade" target="_blank" rel="noopener">Car-Town-ReMade on GitHub</a>
+    <span>Unity {{{ UNITY_VERSION }}}</span>
+#if DEVELOPMENT_PLAYER
+    <span class="tag">development build</span>
+#endif
+  </footer>
+
+  <script>
+    var container = document.getElementById("unity-container");
+    var canvas = document.getElementById("unity-canvas");
+    var overlay = document.getElementById("unity-overlay");
+    var progressBar = document.getElementById("unity-progress-bar");
+    var progressPercent = document.getElementById("unity-progress-percent");
+    var progressLabel = document.getElementById("unity-progress-label");
+    var progress = document.getElementById("unity-progress");
+    var errorBox = document.getElementById("unity-error");
+    var toolbar = document.getElementById("unity-toolbar");
+    var fullscreenButton = document.getElementById("unity-fullscreen");
+    var fullscreenLabel = document.getElementById("unity-fullscreen-label");
+
+    var isMobile = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent);
+    if (isMobile) {
+      document.getElementById("unity-mobile-warning").classList.add("visible");
+    }
+
+    var buildUrl = "Build";
+    var loaderUrl = buildUrl + "/{{{ LOADER_FILENAME }}}";
+    var config = {
+      dataUrl: buildUrl + "/{{{ DATA_FILENAME }}}",
+      frameworkUrl: buildUrl + "/{{{ FRAMEWORK_FILENAME }}}",
+      codeUrl: buildUrl + "/{{{ CODE_FILENAME }}}",
+#if MEMORY_FILENAME
+      memoryUrl: buildUrl + "/{{{ MEMORY_FILENAME }}}",
+#endif
+#if SYMBOLS_FILENAME
+      symbolsUrl: buildUrl + "/{{{ SYMBOLS_FILENAME }}}",
+#endif
+      streamingAssetsUrl: "StreamingAssets",
+      // The 2020.1 template preprocessor substitutes these as plain text, which
+      // is the form the "Build configuration" example in the manual uses.
+      companyName: "{{{ COMPANY_NAME }}}",
+      productName: "{{{ PRODUCT_NAME }}}",
+      productVersion: "{{{ PRODUCT_VERSION }}}"
+    };
+
+    var unityInstance = null;
+    var script = document.createElement("script");
+    script.src = loaderUrl;
+    script.onload = function () {
+      createUnityInstance(canvas, config, function (p) {
+        var percent = Math.round(p * 100);
+        progressBar.style.width = percent + "%";
+        progressPercent.textContent = percent + "%";
+        progress.setAttribute("aria-valuenow", String(percent));
+        progressLabel.textContent = percent < 100 ? "Loading Car Town ReMade..." : "Starting the engine...";
+      }).then(function (instance) {
+        unityInstance = instance;
+        overlay.classList.add("hidden");
+        toolbar.classList.add("visible");
+        fullscreenButton.focus();
+      }).catch(function (message) {
+        progressLabel.textContent = "The player could not start.";
+        progressBar.style.width = "0%";
+        errorBox.style.display = "block";
+        errorBox.textContent = message + " If the problem persists, make sure the build is served over HTTP and that the browser supports WebGL.";
+        console.error("Unity player error:", message);
+      });
+    };
+    script.onerror = function () {
+      progressLabel.textContent = "The player files could not be loaded.";
+      errorBox.style.display = "block";
+      errorBox.textContent = "The build loader (" + loaderUrl + ") is missing. Files are gzip compressed, so the page has to be served with decompression fallback enabled.";
+    };
+    document.body.appendChild(script);
+
+    fullscreenButton.addEventListener("click", function () {
+      if (!unityInstance) {
+        return;
+      }
+      var isFullscreen = document.fullscreenElement || document.mozFullScreenElement || document.webkitFullscreenElement;
+      unityInstance.SetFullscreen(isFullscreen ? 0 : 1);
+      setTimeout(updateFullscreenLabel, 250);
+    });
+    document.addEventListener("fullscreenchange", updateFullscreenLabel);
+    document.addEventListener("webkitfullscreenchange", updateFullscreenLabel);
+
+    function updateFullscreenLabel() {
+      var isFullscreen = document.fullscreenElement || document.mozFullScreenElement || document.webkitFullscreenElement;
+      fullscreenLabel.textContent = isFullscreen ? "Exit fullscreen" : "Fullscreen";
+    }
+  </script>
+</body>
+</html>
