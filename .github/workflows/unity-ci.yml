@@ -23,7 +23,9 @@ name: Unity CI
 # One-time activation steps: https://game.ci/docs/github/activation
 #
 # The Pages deployment needs Pages enabled with "GitHub Actions" as its source;
-# the Configure Pages step tries to enable it automatically. WebGL players are
+# the Configure Pages step asks GitHub to enable it, but a token that may
+# administer Pages is required for that, so enabling it once by hand is the
+# dependable route. WebGL players are
 # gzip compressed, so ProjectSettings.asset enables Decompression Fallback -
 # GitHub Pages cannot set Content-Encoding headers.
 #
@@ -62,7 +64,7 @@ jobs:
       published_webgl: ${{ steps.published.outputs.webgl }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The tags carry a hash of the Dockerfile, so the published images are
       # reused until the Dockerfile changes.
@@ -83,7 +85,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -141,7 +143,7 @@ jobs:
       UNITY_CI_ENABLED: ${{ secrets.UNITY_LICENSE != '' || secrets.UNITY_SERIAL != '' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Note missing license secret
         if: ${{ env.UNITY_CI_ENABLED != 'true' }}
@@ -157,7 +159,7 @@ jobs:
       # Needed while a published image is private; public packages need no login.
       - name: Log in to GitHub Container Registry
         if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published_unity == 'true' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -166,7 +168,7 @@ jobs:
       # Reuses Unity's import cache between runs (roughly halves the run time).
       - name: Cache Unity Library
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: Library
           key: Library-${{ runner.os }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
@@ -192,7 +194,7 @@ jobs:
 
       - name: Upload test results
         if: always() && env.UNITY_CI_ENABLED == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: EditMode test results
           path: ${{ steps.editmode-tests.outputs.artifactsPath }}
@@ -212,7 +214,7 @@ jobs:
       UNITY_CI_ENABLED: ${{ secrets.UNITY_LICENSE != '' || secrets.UNITY_SERIAL != '' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Note missing license secret
         if: ${{ env.UNITY_CI_ENABLED != 'true' }}
@@ -220,7 +222,7 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published_unity == 'true' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -228,7 +230,7 @@ jobs:
 
       - name: Cache Unity Library
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: Library
           key: Library-${{ runner.os }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
@@ -249,7 +251,7 @@ jobs:
       # keeping in mind that artifact storage is limited on free plans.
       # - name: Upload build
       #   if: ${{ env.UNITY_CI_ENABLED == 'true' }}
-      #   uses: actions/upload-artifact@v4
+      #   uses: actions/upload-artifact@v7
       #   with:
       #     name: StandaloneLinux64
       #     path: build/StandaloneLinux64
@@ -283,7 +285,7 @@ jobs:
       UNITY_CI_ENABLED: ${{ secrets.UNITY_LICENSE != '' || secrets.UNITY_SERIAL != '' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Note missing license secret
         if: ${{ env.UNITY_CI_ENABLED != 'true' }}
@@ -291,7 +293,7 @@ jobs:
 
       - name: Log in to GitHub Container Registry
         if: ${{ env.UNITY_CI_ENABLED == 'true' && needs.ci_image.outputs.published_webgl == 'true' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -299,7 +301,7 @@ jobs:
 
       - name: Cache Unity Library
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: Library
           key: Library-WebGL-${{ runner.os }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
@@ -316,19 +318,22 @@ jobs:
           targetPlatform: WebGL
           allowDirtyBuild: true
 
+      # Asks GitHub to switch Pages on with "GitHub Actions" as its source. The
+      # action only manages to do that when the token may administer Pages, so
+      # enabling it once under Settings > Pages is the reliable path.
       - name: Configure Pages
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
         with:
-          enablement: true # turns Pages on with "GitHub Actions" as its source
+          enablement: true
 
       - name: Upload the player
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: build/WebGL/WebGL
 
       - name: Deploy to GitHub Pages
         id: deploy
         if: ${{ env.UNITY_CI_ENABLED == 'true' }}
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
