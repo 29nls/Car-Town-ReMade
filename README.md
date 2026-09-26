@@ -53,6 +53,60 @@ This is a traffic simulation rather than an input-driven game, so there are no p
 
 The traffic light and pedestrian systems are implemented in code but are not placed in `MainScene` yet, and the scene currently has a single vehicle route. Add those objects (or a second parallel vehicle route) in the Editor to see those features in action.
 
+## Continuous Integration
+
+Every push to `main`, every pull request and every manual run of **Unity CI** executes [`.github/workflows/unity-ci.yml`](.github/workflows/unity-ci.yml) inside the official GameCI containers, so the runner needs no Unity installation. The badge at the top of this page reports the newest run on `main`; the runs themselves are listed under **Actions**.
+
+| Job | What it does |
+| --- | --- |
+| `Publish Unity + Blender images` | Builds and publishes the custom editor image described below to GitHub's container registry. |
+| `EditMode tests` | Runs the 25 tests in `Assets/Tests/EditMode` through `game-ci/unity-test-runner` and uploads the result file as an artifact. |
+| `Compile & build project` | Builds a StandaloneLinux64 player. A build compiles every script, so compiler errors fail the job even though the player is not published. |
+| `WebGL build & Pages deploy` | Builds the WebGL player and deploys it to GitHub Pages. Pull requests are skipped, so they validate the code without publishing a player. |
+
+### The Unity + Blender image on GHCR
+
+The repository contains `.blend` models, and Unity can only convert them when a `blender` executable is on `PATH`. `.github/docker/unity-editor-blender/Dockerfile` therefore installs Blender on top of a GameCI editor image, and the workflow publishes the result to GitHub's container registry under two tags - one per Unity module the jobs need:
+
+    ghcr.io/<owner>/car-town-unity-ci:2020.1.8f1-linux-il2cpp-blender-<hash>
+    ghcr.io/<owner>/car-town-unity-ci:2020.1.8f1-webgl-blender-<hash>
+
+`<hash>` is the first eight characters of the SHA-256 of the Dockerfile, so the images are reused until that file changes. When publishing fails - for example because a private package exceeds the storage allowance of a free plan - the image job reports a warning instead of failing, and the other jobs fall back to the stock GameCI image: the build still runs, but the `.blend` models are skipped with "Blender could not be found". Making the packages public under **Packages** in the repository sidebar is free and keeps the Blender enabled image in use.
+
+### Changing the Blender version
+
+1. Update `BLENDER_SHORT_VERSION` (the release directory) and `BLENDER_FULL_VERSION` (the tarball) in `.github/docker/unity-editor-blender/Dockerfile`.
+2. Commit and push. The Dockerfile hash in the image tag changes, so the next run rebuilds and republishes the image; nothing else has to be edited.
+
+Keep the version at 3.3 or newer: Blender refuses to open files that were written by a newer version than itself, and the models here were saved by Blender 3.0 and 3.3. A rebuild takes a few minutes because the Unity base image is downloaded again.
+
+### Running the EditMode tests locally
+
+The 25 tests cover `CarPool` (14) and `SpatialHash` (11). They run against the `CarTown.Runtime` assembly and need no scene, so they finish in seconds.
+
+In the Editor open **Window > General > Test Runner**, choose the **EditMode** tab and press **Run All**. From the command line, the runner accepts the same flags CI passes:
+
+    "C:\Program Files\Unity\Hub\Editor\2020.1.8f1\Editor\Unity.exe" -runTests -batchmode -projectPath . -testPlatform EditMode -testResults TestResults.xml
+
+Use `/Applications/Unity/Hub/Editor/2020.1.8f1/Unity.app/Contents/MacOS/Unity` on macOS or `~/Unity/Hub/Editor/2020.1.8f1/Editor/Unity` on Linux. The results are written to `TestResults.xml` in NUnit format, the same file the CI job reads.
+
+### Unity license secrets
+
+The Unity steps stay idle - with a warning, not a failure - until a license is available, so a fresh clone of this repository still gets green check marks. Add these under **Settings > Secrets and variables > Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `UNITY_LICENSE` | Contents of a manually activated license file (`.ulf`). For Personal licenses. |
+| `UNITY_SERIAL` | License serial, used instead of `UNITY_LICENSE`. For Plus and Pro licenses. |
+| `UNITY_EMAIL` | E-mail address of the Unity account. |
+| `UNITY_PASSWORD` | Password of the Unity account. |
+
+The one-time activation is described in the [GameCI activation guide](https://game.ci/docs/github/activation). Until the secrets exist no WebGL player is deployed, so <https://29nls.github.io/Car-Town-ReMade/> keeps returning 404.
+
+### The WebGL player on GitHub Pages
+
+The WebGL job builds with the template in `Assets/WebGLTemplates/CarTownReMade`: a branded loading screen with the project logo, a progress bar, a fullscreen button and a link back to this repository. `ProjectSettings/ProjectSettings.asset` selects it through `webGLTemplate`. The player is gzip compressed with **Decompression Fallback** enabled, because GitHub Pages cannot send `Content-Encoding` headers. Enable Pages once under **Settings > Pages** with **GitHub Actions** as its source; the workflow's `configure-pages` step only manages that when the token may administer Pages.
+
 ## License
 
 Distributed under the MIT License. See [LICENSE.md](LICENSE.md) for more information.
